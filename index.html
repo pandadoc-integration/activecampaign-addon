@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document List</title>
+    <link
+      rel="stylesheet"
+      href="https://pd-js-sdk.s3.amazonaws.com/latest/pandadoc-js-sdk.css"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+          Cantarell, sans-serif;
+        overflow: hidden;
+        min-height: 100vh;
+      }
+
+      #pandadoc-container {
+        width: 100%;
+        min-height: 100vh;
+        height: auto;
+        display: flex;
+        flex-direction: column;
+      }
+
+      #pandadoc-container iframe {
+        width: 100%;
+        flex: 1;
+        min-height: 100vh;
+        border: none;
+      }
+
+      .loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        font-size: 16px;
+        color: #666;
+      }
+
+      .error {
+        color: red;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="pandadoc-container">
+      <div class="loading">Loading PandaDoc...</div>
+    </div>
+
+    <script src="https://unpkg.com/zoid@9.0.85/dist/zoid.frameworks.js"></script>
+    <script>
+      /**
+       * PandaDoc CRM Integration for ActiveCampaign
+       *
+       * Supported Entity Types:
+       * - accounts
+       * - contacts
+       * - deals
+       */
+
+      /**
+       * Get context from parent Zoid component or URL parameters
+       */
+      async function getContext() {
+        // Get URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+
+        // Priority: URL query string > Zoid props > defaults
+        let entityType = urlParams.get('entityType');
+        let entityId = '';
+        let contact = {
+          firstName: urlParams.get('firstName') || '',
+          lastName: urlParams.get('lastName') || '',
+          email: urlParams.get('email') || '',
+          phone: urlParams.get('phone') || '',
+        };
+
+        // If not in query string, try to get from Zoid props
+        if (window.xprops?.data) {
+          const xpropsData = window.xprops.data;
+          entityType = entityType || xpropsData.entityType;
+
+          // For accounts, try to get owner information
+          if (xpropsData.account && entityType === 'accounts') {
+            entityId = xpropsData.account.id || '';
+          }
+
+          // For deals, fetch the contact details from the API
+          if (xpropsData.deal && entityType === 'deals') {
+            entityId = xpropsData.deal.id || '';
+          }
+
+          // For contacts, get contact data directly from xprops
+          if (xpropsData.contact) {
+            contact.firstName =
+              contact.firstName || xpropsData.contact.firstName || '';
+            contact.lastName =
+              contact.lastName || xpropsData.contact.lastName || '';
+            contact.email = contact.email || xpropsData.contact.email || '';
+            contact.phone = contact.phone || xpropsData.contact.phone || '';
+            contact.id = contact.id || xpropsData.contact.id || '';
+            entityId = xpropsData.contact.id || '';
+          }
+        }
+
+        return {
+          entity: {
+            type: entityType || 'contacts', // Default to contacts
+            id: entityId || '', // Default to empty string
+          },
+          contact: contact,
+        };
+      }
+
+      /**
+       * Load external script dynamically
+       */
+      function loadScript(src) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      /**
+       * Main PandaDoc embed function - displays documents related to the specific entity type/id
+       * @param {Object} context - Context object containing entity information
+       */
+      async function PD_embed(context) {
+        try {
+          // Load PandaDoc JavaScript SDK if not already loaded
+          if (typeof PandaDoc === 'undefined') {
+            await loadScript(
+              'https://pd-js-sdk.s3.amazonaws.com/latest/pandadoc-js-sdk.js',
+            );
+          }
+
+          const container = document.getElementById('pandadoc-container');
+          container.innerHTML = ''; // Clear loading message
+
+          const documentsUI = new PandaDoc.DefaultView();
+
+          documentsUI.init({
+            el: container,
+            initOptions: {
+              externalEditor: true,
+              provider: {
+                // ActiveCampaign provider slug
+                name: 'activecampaign',
+              },
+            },
+            data: {
+              // Integration context details to render PandaDoc entities linked to ActiveCampaign entity
+              sourceEntity: {
+                type: context.entity.type, // 'accounts', 'contacts', or 'deals'
+                id: context.entity.id,
+              },
+            },
+            events: {
+              // Triggered when user clicks "Create Document" button
+              onDocumentCreate: () => {
+                // Build URL with context parameters for the wizard
+                const wizardUrl = new URL(window.location.href);
+                wizardUrl.searchParams.set('mode', 'wizard');
+                wizardUrl.searchParams.set('entityType', context.entity.type);
+                wizardUrl.searchParams.set('entityId', context.entity.id);
+                if (context.contact.firstName)
+                  wizardUrl.searchParams.set(
+                    'firstName',
+                    context.contact.firstName,
+                  );
+                if (context.contact.lastName)
+                  wizardUrl.searchParams.set(
+                    'lastName',
+                    context.contact.lastName,
+                  );
+                if (context.contact.email)
+                  wizardUrl.searchParams.set('email', context.contact.email);
+                if (context.contact.phone)
+                  wizardUrl.searchParams.set('phone', context.contact.phone);
+
+                // Open wizard in a new tab outside of the iframe
+                window.open(wizardUrl.toString(), '_blank');
+              },
+              onDocumentOpen(documentInfo) {
+                window.open(documentInfo.documentUrl, '_blank');
+              },
+            },
+          });
+          // Listen for postMessage from wizard tab to refresh documents
+          window.addEventListener('message', (event) => {
+            if (event.data === 'pandadoc_refresh_documents') {
+              console.log('Refreshing documents list after wizard completion');
+              documentsUI.reload();
+            }
+          });
+        } catch (error) {
+          console.error('Error loading PandaDoc embed:', error);
+          document.getElementById('pandadoc-container').innerHTML =
+            '<div class="loading error">Failed to load PandaDoc. Please try again.</div>';
+        }
+      }
+
+      /**
+       * PandaDoc wizard function - handles document creation
+       * @param {Object} context - Context object containing entity information
+       * @param {Object} documentsUI - Optional reference to the documents UI for refresh after wizard closes
+       */
+      async function PD_wizard(context, documentsUI) {
+        try {
+          // Load PandaDoc JavaScript SDK if not already loaded
+          if (typeof PandaDoc === 'undefined') {
+            await loadScript(
+              'https://pd-js-sdk.s3.amazonaws.com/latest/pandadoc-js-sdk.js',
+            );
+          }
+
+          const container = document.getElementById('pandadoc-container');
+          container.innerHTML = ''; // Clear existing content
+
+          // Determine recipients based on entity type
+          let recipients = [];
+
+          // For contacts, use the single contact from context
+          if (context.contact.email) {
+            recipients = [
+              {
+                first_name: context.contact.firstName || '',
+                last_name: context.contact.lastName || '',
+                email: context.contact.email || '',
+                phone: context.contact.phone || '',
+              },
+            ];
+          }
+
+          const wizardUI = new PandaDoc.DocEditor();
+          wizardUI.show({
+            el: container,
+            initOptions: {
+              externalEditor: true,
+              hideCloseButton: false,
+              provider: {
+                name: 'activecampaign',
+              },
+            },
+            data: {
+              // Pass the same entity context to the wizard
+              // This allows PandaDoc to automatically link the created document
+              // to the current ActiveCampaign entity (account, contact, or deal)
+              sourceEntity: {
+                type: context.entity.type,
+                id: context.entity.id,
+              },
+              // Pre-populate recipient information from contact data
+              recipients: recipients,
+            },
+            events: {
+              // Called when wizard is closed
+              onClose: () => {
+                wizardUI.destroy();
+                // Signal the main iframe to refresh documents list via postMessage
+                if (window.opener) {
+                  window.opener.postMessage('pandadoc_refresh_documents', '*');
+                }
+                // Close the tab after document creation to return user to ActiveCampaign
+                // Small delay to ensure any pending operations complete
+                setTimeout(() => {
+                  window.close();
+                }, 500);
+              },
+              onDocumentCreated: (documentData) => {
+                console.log('Document created:', documentData);
+                wizardUI.destroy();
+                // Signal the main iframe to refresh documents list via postMessage
+                if (window.opener) {
+                  window.opener.postMessage('pandadoc_refresh_documents', '*');
+                }
+                // Close the tab after document creation to return user to ActiveCampaign
+                // Small delay to ensure any pending operations complete
+                setTimeout(() => {
+                  window.close();
+                }, 500);
+              },
+              onDocumentSent: (documentData) => {
+                console.log('Document sent:', documentData);
+                wizardUI.destroy();
+                // Signal the main iframe to refresh documents list via postMessage
+                if (window.opener) {
+                  window.opener.postMessage('pandadoc_refresh_documents', '*');
+                }
+                // Close the tab after document is sent to return user to ActiveCampaign
+                // Small delay to ensure any pending operations complete
+                setTimeout(() => {
+                  window.close();
+                }, 500);
+              },
+            },
+          });
+        } catch (error) {
+          console.error('Error loading PandaDoc wizard:', error);
+          document.getElementById('pandadoc-container').innerHTML =
+            '<div class="loading error">Failed to load document wizard. Please try again.</div>';
+        }
+      }
+
+      /**
+       * Initialize on page load
+       */
+      window.onload = async function () {
+        try {
+          // First, get entity type from URL parameters to determine tag name
+          const urlParams = new URLSearchParams(window.location.search);
+          let entityType = urlParams.get('entityType') || 'contacts';
+          const mode = urlParams.get('mode');
+
+          // Determine tag prefix based on entity type
+          let tagPrefix = 'Contact'; // Default
+          if (entityType === 'accounts') {
+            tagPrefix = 'Account';
+          } else if (entityType === 'deals') {
+            tagPrefix = 'Deal';
+          }
+
+          // Create zoid component first - this makes xprops available
+          zoid.create({
+            tag: `PandaDoc ${tagPrefix} Docs`,
+            url: window.location.href,
+            autoResize: {
+              width: false, // Or true, depending on your needs
+              height: true,
+              element: '#pandadoc-container', // Optional: target a specific element
+            },
+          });
+
+          // Wait a bit for xprops to be available after zoid.create
+          await new Promise((resolve) => setTimeout(resolve, 100));
+
+          // Now get full context including xprops data (async to fetch owner data if needed)
+          const context = await getContext();
+
+          // If entityId is provided via URL (for wizard mode), use it
+          const entityIdFromUrl = urlParams.get('entityId');
+          if (entityIdFromUrl) {
+            context.entity.id = entityIdFromUrl;
+          }
+
+          if (!context.entity.type) {
+            console.error('No entity ID provided');
+            document.getElementById('pandadoc-container').innerHTML =
+              '<div class="loading error">Missing entity information. Please provide entityId parameter.</div>';
+            return;
+          }
+
+          // Validate entity type
+          const validEntityTypes = ['accounts', 'contacts', 'deals'];
+          if (!validEntityTypes.includes(context.entity.type)) {
+            console.warn(
+              `Invalid entity type: ${context.entity.type}. Defaulting to 'contacts'.`,
+            );
+            context.entity.type = 'contacts';
+          }
+
+          // Check if we should open wizard mode directly (when opened in new tab)
+          if (mode === 'wizard') {
+            PD_wizard(context);
+          } else {
+            // Initialize the document list view
+            PD_embed(context);
+          }
+        } catch (error) {
+          console.error('Initialization error:', error);
+          document.getElementById('pandadoc-container').innerHTML =
+            '<div class="loading error">Failed to initialize PandaDoc integration. Please refresh the page.</div>';
+        }
+      };
+    </script>
+  </body>
+</html>
