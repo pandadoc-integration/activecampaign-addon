@@ -54,7 +54,6 @@
       <div class="loading">Loading PandaDoc...</div>
     </div>
 
-    <script src="https://unpkg.com/zoid@9.0.85/dist/zoid.frameworks.js"></script>
     <script>
       /**
        * PandaDoc CRM Integration for ActiveCampaign
@@ -64,6 +63,38 @@
        * - contacts
        * - deals
        */
+
+      /**
+       * zoid refuses to initialise when the parent and child run different
+       * versions ("Parent window has zoid version X, child window has version Y"),
+       * and ActiveCampaign controls the parent version. So instead of pinning zoid,
+       * read the version the parent used from window.name and load the same one.
+       * DEFAULT_ZOID_VERSION is used when not rendered by zoid (e.g. wizard tab).
+       */
+      const DEFAULT_ZOID_VERSION = '9.0.86';
+
+      function getParentZoidVersion() {
+        try {
+          // window.name = "__zoid__<tag>__<base64url payload>__"
+          const payload = window.name.split('__')[3];
+          const decoded = JSON.parse(
+            atob(payload.replace(/-/g, '+').replace(/_/g, '/')),
+          );
+          // Version is e.g. "9_0_86"; only accept that exact shape since it ends up in a URL
+          const version = JSON.parse(decoded.reference.val).version;
+          if (/^\d+_\d+_\d+$/.test(version)) return version.replace(/_/g, '.');
+        } catch (e) {
+          // Not rendered by zoid, or payload is not inline - use the default
+        }
+        return null;
+      }
+
+      async function loadZoid() {
+        const version = getParentZoidVersion() || DEFAULT_ZOID_VERSION;
+        await loadScript(
+          `https://unpkg.com/zoid@${version}/dist/zoid.frameworks.js`,
+        );
+      }
 
       /**
        * Get context from parent Zoid component or URL parameters
@@ -330,6 +361,9 @@
           } else if (entityType === 'deals') {
             tagPrefix = 'Deal';
           }
+
+          // Load the zoid build matching the parent's version
+          await loadZoid();
 
           // Create zoid component first - this makes xprops available
           zoid.create({
